@@ -1,0 +1,16 @@
+[package]
+name = "rtgraph"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+glu-sys = "0.1.4"
+glfw = { version = "0.60.0", default-features = false, features = [
+    "static-link",
+    "raw-window-handle-v0-6",
+    "image",
+    "vulkan",
+    "log",
+    "wayland",
+    "x11",
+] }
