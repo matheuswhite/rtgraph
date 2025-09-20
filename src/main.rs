@@ -4,7 +4,10 @@ extern crate glu_sys;
 use crate::{grid::Grid, line::Strip};
 use core::str;
 use glfw::{Action, Context, Glfw, GlfwReceiver, Key, PWindow, WindowEvent};
-use std::{io, sync::mpsc::Receiver};
+use std::{
+    io,
+    sync::mpsc::{Receiver, Sender, channel},
+};
 
 mod font;
 mod grid;
@@ -16,15 +19,26 @@ struct App {
     events: GlfwReceiver<(f64, WindowEvent)>,
     strips: Vec<Strip>,
     line_rx: Receiver<(f32, Vec<f32>)>,
+    command_rx: Receiver<Command>,
     grid: Grid,
     color_pool: Vec<(f32, f32, f32)>,
+}
+
+enum Command {
+    Save(String),
 }
 
 impl App {
     const WIDTH: f32 = 500.0;
     const HEIGHT: f32 = 250.0;
 
-    fn new(line_rx: Receiver<(f32, Vec<f32>)>, title: String, x_step: f32, y_step: f32) -> Self {
+    fn new(
+        line_rx: Receiver<(f32, Vec<f32>)>,
+        command_rx: Receiver<Command>,
+        title: String,
+        x_step: f32,
+        y_step: f32,
+    ) -> Self {
         let mut glfw = glfw::init_no_callbacks().unwrap();
 
         // Set OpenGL version hints BEFORE creating the window
@@ -55,6 +69,7 @@ impl App {
             events,
             strips: vec![],
             line_rx,
+            command_rx,
             grid: Grid::new(Self::WIDTH, Self::HEIGHT, x_step, y_step),
             color_pool: vec![
                 (1.0, 1.0, 0.0),
@@ -123,12 +138,33 @@ impl App {
             self.window.swap_buffers();
             self.process_events();
             self.render();
+
+            while let Some(command) = self.command_rx.try_recv().ok() {
+                match command {
+                    Command::Save(filepath) => {
+                        let frame_buffer = read_frame_buffer();
+
+                        if let Err(e) = image::save_buffer(
+                            &filepath,
+                            &frame_buffer,
+                            App::WIDTH as u32,
+                            App::HEIGHT as u32,
+                            image::ColorType::Rgba8,
+                        ) {
+                            eprintln!("Failed to save {}: {}", filepath, e);
+                        } else {
+                            println!("Screenshot saved to {}", filepath);
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 fn main() {
-    let (line_tx, line_rx) = std::sync::mpsc::channel();
+    let (line_tx, line_rx) = channel();
+    let (command_tx, command_rx) = channel();
 
     let mut x_step = 1.0;
     let mut y_step = 5.0;
@@ -172,27 +208,75 @@ fn main() {
     }
 
     std::thread::spawn(move || {
-        // Read lines from stdin
+        /* Read lines from stdin */
         for line in io::stdin().lines() {
             let line = line.unwrap();
             let parts: Vec<&str> = line.split(",").collect();
-            if parts.len() < 2 {
-                continue;
-            }
 
-            if let (Ok(x), y) = (
-                parts[0].parse::<f32>(),
-                parts[1..]
-                    .iter()
-                    .filter_map(|v| v.parse::<f32>().ok())
-                    .collect(),
-            ) {
-                line_tx.send((x, y)).unwrap();
-            }
+            handle_save_command(&parts, &command_tx).or_else(|| handle_line_plot(&parts, &line_tx));
         }
     });
 
-    let mut app = App::new(line_rx, title, x_step, y_step);
+    let mut app = App::new(line_rx, command_rx, title, x_step, y_step);
 
     app.run();
+}
+
+fn read_frame_buffer() -> Vec<u8> {
+    let mut frame_buffer = vec![0u8; (App::WIDTH * App::HEIGHT * 4.0) as usize];
+
+    unsafe {
+        glu_sys::glReadPixels(
+            0,
+            0,
+            App::WIDTH as i32,
+            App::HEIGHT as i32,
+            glu_sys::GL_RGBA,
+            glu_sys::GL_UNSIGNED_BYTE,
+            frame_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+        );
+    }
+
+    let h = App::HEIGHT as usize;
+    let w = App::WIDTH as usize;
+    let mut flipped_pixels = vec![0u8; frame_buffer.len()];
+    let bytes_per_row = w * 4; // 4 bytes por pixel (RGBA)
+    for i in 0..h as usize {
+        for j in 0..bytes_per_row {
+            flipped_pixels[(h - 1 - i) * bytes_per_row + j] = frame_buffer[i * bytes_per_row + j];
+        }
+    }
+
+    flipped_pixels
+}
+
+fn handle_save_command(line: &[&str], command_tx: &Sender<Command>) -> Option<()> {
+    if let ["!save", filepath] = line {
+        command_tx
+            .send(Command::Save(filepath.to_string()))
+            .unwrap();
+
+        return Some(());
+    }
+
+    None
+}
+
+fn handle_line_plot(line: &[&str], line_tx: &Sender<(f32, Vec<f32>)>) -> Option<()> {
+    if line.len() < 2 {
+        return None;
+    }
+
+    if let (Ok(x), y) = (
+        line[0].parse::<f32>(),
+        line[1..]
+            .iter()
+            .filter_map(|v| v.parse::<f32>().ok())
+            .collect(),
+    ) {
+        line_tx.send((x, y)).unwrap();
+        return Some(());
+    }
+
+    None
 }
