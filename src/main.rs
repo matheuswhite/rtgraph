@@ -24,7 +24,7 @@ impl App {
     const WIDTH: f32 = 500.0;
     const HEIGHT: f32 = 250.0;
 
-    fn new(line_rx: Receiver<(f32, Vec<f32>)>, x_step: f32, y_step: f32) -> Self {
+    fn new(line_rx: Receiver<(f32, Vec<f32>)>, title: String, x_step: f32, y_step: f32) -> Self {
         let mut glfw = glfw::init_no_callbacks().unwrap();
 
         // Set OpenGL version hints BEFORE creating the window
@@ -38,7 +38,7 @@ impl App {
             .create_window(
                 Self::WIDTH as u32,
                 Self::HEIGHT as u32,
-                "RTGraph",
+                &title,
                 glfw::WindowMode::Windowed,
             )
             .unwrap();
@@ -130,16 +130,46 @@ impl App {
 fn main() {
     let (line_tx, line_rx) = std::sync::mpsc::channel();
 
+    let mut x_step = 1.0;
+    let mut y_step = 5.0;
+    let mut title = String::from("RTGraph");
+
     let mut args = std::env::args();
-    args.next(); // skip program name
-    let x_step = args
-        .next()
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(1.0);
-    let y_step = args
-        .next()
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(5.0);
+    /* skip program name */
+    args.next();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!("Usage: rtgraph [x_step] [y_step] [-t|--title <title>]");
+                return;
+            }
+            "-t" | "--title" => {
+                let Some(t) = args.next() else {
+                    panic!("Title not provided after -t/--title");
+                };
+
+                title = t;
+            }
+            "-xs" | "--xstep" => {
+                let Some(xs) = args.next() else {
+                    panic!("X step not provided after -x/--xstep");
+                };
+
+                x_step = xs.parse::<f32>().unwrap_or(1.0);
+            }
+            "-ys" | "--ystep" => {
+                let Some(ys) = args.next() else {
+                    panic!("Y step not provided after -y/--ystep");
+                };
+
+                y_step = ys.parse::<f32>().unwrap_or(5.0);
+            }
+            _ => {
+                panic!("Unknown argument: {}", arg);
+            }
+        }
+    }
 
     std::thread::spawn(move || {
         // Read lines from stdin
@@ -162,7 +192,7 @@ fn main() {
         }
     });
 
-    let mut app = App::new(line_rx, x_step, y_step);
+    let mut app = App::new(line_rx, title, x_step, y_step);
 
     app.run();
 }
