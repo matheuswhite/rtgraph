@@ -14,3 +14,4 @@ glfw = { version = "0.60.0", default-features = false, features = [
     "wayland",
     "x11",
 ] }
+rusttype = "0.9.3"

@@ -2,9 +2,11 @@ extern crate glfw;
 extern crate glu_sys;
 
 use crate::{grid::Grid, line::Strip};
+use core::str;
 use glfw::{Action, Context, Glfw, GlfwReceiver, Key, PWindow, WindowEvent};
 use std::{io, sync::mpsc::Receiver};
 
+mod font;
 mod grid;
 mod line;
 
@@ -12,16 +14,17 @@ struct App {
     glfw: Glfw,
     window: PWindow,
     events: GlfwReceiver<(f64, WindowEvent)>,
-    strip: Strip,
-    line_rx: Receiver<(f32, f32)>,
+    strips: Vec<Strip>,
+    line_rx: Receiver<(f32, Vec<f32>)>,
     grid: Grid,
+    color_pool: Vec<(f32, f32, f32)>,
 }
 
 impl App {
     const WIDTH: f32 = 500.0;
     const HEIGHT: f32 = 250.0;
 
-    fn new(line_rx: Receiver<(f32, f32)>) -> Self {
+    fn new(line_rx: Receiver<(f32, Vec<f32>)>, x_step: f32, y_step: f32) -> Self {
         let mut glfw = glfw::init_no_callbacks().unwrap();
 
         // Set OpenGL version hints BEFORE creating the window
@@ -50,9 +53,20 @@ impl App {
             glfw,
             window,
             events,
-            strip: Strip::new(Self::WIDTH, Self::HEIGHT),
+            strips: vec![],
             line_rx,
-            grid: Grid::new(Self::WIDTH, Self::HEIGHT, 100.0),
+            grid: Grid::new(Self::WIDTH, Self::HEIGHT, x_step, y_step),
+            color_pool: vec![
+                (1.0, 1.0, 0.0),
+                (0.0, 1.0, 0.0),
+                (0.0, 0.0, 1.0),
+                (1.0, 1.0, 0.0),
+                (1.0, 0.0, 1.0),
+                (0.0, 1.0, 1.0),
+                (1.0, 0.5, 0.0),
+                (0.5, 1.0, 0.0),
+                (0.5, 0.5, 1.0),
+            ],
         }
     }
 
@@ -70,8 +84,9 @@ impl App {
 
             self.grid.draw();
 
-            glu_sys::glColor3f(1.0, 1.0, 0.0);
-            self.strip.draw();
+            for strip in &self.strips {
+                strip.draw(&self.grid);
+            }
         }
     }
 
@@ -90,9 +105,20 @@ impl App {
 
     fn run(&mut self) {
         while !self.window.should_close() {
-            while let Some(point) = self.line_rx.try_recv().ok() {
-                self.strip.add_line(point);
+            while let Some((time, values)) = self.line_rx.try_recv().ok() {
+                for (i, value) in values.iter().enumerate() {
+                    let strip = if i < self.strips.len() {
+                        &mut self.strips[i]
+                    } else {
+                        self.strips
+                            .push(Strip::new(self.color_pool[i % self.color_pool.len()]));
+                        self.strips.last_mut().unwrap()
+                    };
+                    strip.add_line((time, *value), &mut self.grid);
+                }
             }
+
+            self.grid.build_texts();
 
             self.window.swap_buffers();
             self.process_events();
@@ -104,22 +130,39 @@ impl App {
 fn main() {
     let (line_tx, line_rx) = std::sync::mpsc::channel();
 
+    let mut args = std::env::args();
+    args.next(); // skip program name
+    let x_step = args
+        .next()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(1.0);
+    let y_step = args
+        .next()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(5.0);
+
     std::thread::spawn(move || {
         // Read lines from stdin
         for line in io::stdin().lines() {
             let line = line.unwrap();
             let parts: Vec<&str> = line.split(",").collect();
-            if parts.len() != 2 {
+            if parts.len() < 2 {
                 continue;
             }
 
-            if let (Ok(x), Ok(y)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
+            if let (Ok(x), y) = (
+                parts[0].parse::<f32>(),
+                parts[1..]
+                    .iter()
+                    .filter_map(|v| v.parse::<f32>().ok())
+                    .collect(),
+            ) {
                 line_tx.send((x, y)).unwrap();
             }
         }
     });
 
-    let mut app = App::new(line_rx);
+    let mut app = App::new(line_rx, x_step, y_step);
 
     app.run();
 }
