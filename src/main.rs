@@ -142,13 +142,16 @@ impl App {
             while let Some(command) = self.command_rx.try_recv().ok() {
                 match command {
                     Command::Save(filepath) => {
-                        let frame_buffer = read_frame_buffer();
+                        let (w, h) = self.window.get_framebuffer_size();
+                        let w = w as u32;
+                        let h = h as u32;
+                        let frame_buffer = read_frame_buffer(w, h);
 
                         if let Err(e) = image::save_buffer(
                             &filepath,
                             &frame_buffer,
-                            App::WIDTH as u32,
-                            App::HEIGHT as u32,
+                            w,
+                            h,
                             image::ColorType::Rgba8,
                         ) {
                             eprintln!("Failed to save {}: {}", filepath, e);
@@ -222,28 +225,32 @@ fn main() {
     app.run();
 }
 
-fn read_frame_buffer() -> Vec<u8> {
-    let mut frame_buffer = vec![0u8; (App::WIDTH * App::HEIGHT * 4.0) as usize];
+fn read_frame_buffer(fb_width: u32, fb_height: u32) -> Vec<u8> {
+    let fb_width = fb_width as u32;
+    let fb_height = fb_height as u32;
+
+    // Allocate correct buffer size: width * height * 4 (RGBA)
+    let mut frame_buffer = vec![0u8; (fb_width * fb_height * 4) as usize];
 
     unsafe {
         glu_sys::glReadPixels(
             0,
             0,
-            App::WIDTH as i32,
-            App::HEIGHT as i32,
+            fb_width as i32,
+            fb_height as i32,
             glu_sys::GL_RGBA,
             glu_sys::GL_UNSIGNED_BYTE,
             frame_buffer.as_mut_ptr() as *mut std::ffi::c_void,
         );
     }
 
-    let h = App::HEIGHT as usize;
-    let w = App::WIDTH as usize;
+    // Flip vertically (OpenGL origin is bottom-left, images are top-left)
     let mut flipped_pixels = vec![0u8; frame_buffer.len()];
-    let bytes_per_row = w * 4; // 4 bytes por pixel (RGBA)
-    for i in 0..h as usize {
+    let bytes_per_row = fb_width as usize * 4;
+    for i in 0..fb_height as usize {
         for j in 0..bytes_per_row {
-            flipped_pixels[(h - 1 - i) * bytes_per_row + j] = frame_buffer[i * bytes_per_row + j];
+            flipped_pixels[(fb_height as usize - 1 - i) * bytes_per_row + j] =
+                frame_buffer[i * bytes_per_row + j];
         }
     }
 
